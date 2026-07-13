@@ -44,3 +44,6 @@
     </application>
 
 </manifest>
+<queries>
+        <package android:name="com.whatsapp" />
+    </queries>
