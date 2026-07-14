@@ -37,6 +37,7 @@ class ProxyWidgetProvider : AppWidgetProvider() {
             views.setImageViewResource(R.id.widget_circle, circleRes)
 
             val launchIntent = Intent(context, MainActivity::class.java)
+            launchIntent.putExtra("run_now", true)
             launchIntent.flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
             val pendingIntent = PendingIntent.getActivity(
                 context, 0, launchIntent,
