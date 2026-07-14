@@ -11,22 +11,32 @@ class ProxyAccessibilityService : AccessibilityService() {
 
     companion object {
         @Volatile
-        private var step = 0
+        private var stepIndex = 0
+        @Volatile
+        private var statusChecked = false
 
         fun resetState() {
-            step = 0
+            stepIndex = 0
+            statusChecked = false
         }
     }
 
-    private val settingsLabels = listOf("Settings", "Paramètres", "الإعدادات")
-    private val storageLabels = listOf("Storage and data", "Stockage et données", "التخزين والبيانات")
-    private val proxyLabels = listOf("Proxy", "وكيل", "بروكسي")
-    private val disconnectedLabels = listOf("غير متصل", "Not connected", "Non connecté")
+    private val defaultSteps = listOf(
+        listOf("Settings", "Paramètres", "الإعدادات"),
+        listOf("Storage and data", "Stockage et données", "التخزين والبيانات"),
+        listOf("Proxy", "وكيل", "بروكسي")
+    )
+
+    private val notConnectedLabels = listOf(
+        "غير متصل", "جارِ الاتصال", "جاري الاتصال",
+        "Not connected", "Connecting...", "Connecting",
+        "Non connecté", "Connexion en cours"
+    )
 
     private val handler = Handler(Looper.getMainLooper())
     private val statusTimeout = Runnable {
-        if (step == 3) {
-            step = 4
+        if (!statusChecked) {
+            statusChecked = true
             reportStatus(connected = true)
         }
     }
@@ -34,26 +44,52 @@ class ProxyAccessibilityService : AccessibilityService() {
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         if (event == null) return
         if (event.packageName != "com.whatsapp") return
-        if (step >= 4) return
+
+        if (PathStore.isRecording(this)) {
+            if (event.eventType == AccessibilityEvent.TYPE_VIEW_CLICKED) {
+                val text = event.text?.joinToString(" ")?.trim()
+                if (!text.isNullOrEmpty()) {
+                    PathStore.appendTempStep(this, text)
+                }
+            }
+            return
+        }
+
+        if (statusChecked) return
 
         val root = rootInActiveWindow ?: return
+        val customSteps = PathStore.getCustomSteps(this)
 
-        when (step) {
-            0 -> if (clickFirstMatch(root, settingsLabels)) step = 1
-            1 -> if (clickFirstMatch(root, storageLabels)) step = 2
-            2 -> if (clickFirstMatch(root, proxyLabels)) {
-                step = 3
-                handler.removeCallbacks(statusTimeout)
-                handler.postDelayed(statusTimeout, 3000)
+        if (customSteps.isNotEmpty()) {
+            if (stepIndex < customSteps.size) {
+                if (clickExactMatch(root, customSteps[stepIndex])) {
+                    stepIndex++
+                    if (stepIndex == customSteps.size) startStatusTimeout()
+                }
+            } else {
+                checkConnectionStatus(root)
             }
-            3 -> checkConnectionStatus(root)
+        } else {
+            if (stepIndex < defaultSteps.size) {
+                if (clickFirstMatch(root, defaultSteps[stepIndex])) {
+                    stepIndex++
+                    if (stepIndex == defaultSteps.size) startStatusTimeout()
+                }
+            } else {
+                checkConnectionStatus(root)
+            }
         }
     }
 
+    private fun startStatusTimeout() {
+        handler.removeCallbacks(statusTimeout)
+        handler.postDelayed(statusTimeout, 3000)
+    }
+
     private fun checkConnectionStatus(root: AccessibilityNodeInfo) {
-        for (label in disconnectedLabels) {
+        for (label in notConnectedLabels) {
             if (root.findAccessibilityNodeInfosByText(label).isNotEmpty()) {
-                step = 4
+                statusChecked = true
                 handler.removeCallbacks(statusTimeout)
                 reportStatus(connected = false)
                 return
@@ -77,6 +113,18 @@ class ProxyAccessibilityService : AccessibilityService() {
                     clickable.performAction(AccessibilityNodeInfo.ACTION_CLICK)
                     return true
                 }
+            }
+        }
+        return false
+    }
+
+    private fun clickExactMatch(root: AccessibilityNodeInfo, label: String): Boolean {
+        val nodes = root.findAccessibilityNodeInfosByText(label)
+        for (node in nodes) {
+            val clickable = findClickableAncestor(node)
+            if (clickable != null) {
+                clickable.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+                return true
             }
         }
         return false
