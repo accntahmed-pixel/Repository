@@ -48,8 +48,9 @@ class ProxyAccessibilityService : AccessibilityService() {
         if (PathStore.isRecording(this)) {
             if (event.eventType == AccessibilityEvent.TYPE_VIEW_CLICKED) {
                 val text = event.text?.joinToString(" ")?.trim()
-                if (!text.isNullOrEmpty()) {
-                    PathStore.appendTempStep(this, text)
+                val label = if (!text.isNullOrEmpty()) text else event.contentDescription?.toString()?.trim()
+                if (!label.isNullOrEmpty()) {
+                    PathStore.appendTempStep(this, label)
                 }
             }
             return
@@ -88,7 +89,7 @@ class ProxyAccessibilityService : AccessibilityService() {
 
     private fun checkConnectionStatus(root: AccessibilityNodeInfo) {
         for (label in notConnectedLabels) {
-            if (root.findAccessibilityNodeInfosByText(label).isNotEmpty()) {
+            if (findNodeMatching(root, label) != null) {
                 statusChecked = true
                 handler.removeCallbacks(statusTimeout)
                 reportStatus(connected = false)
@@ -106,28 +107,32 @@ class ProxyAccessibilityService : AccessibilityService() {
 
     private fun clickFirstMatch(root: AccessibilityNodeInfo, labels: List<String>): Boolean {
         for (label in labels) {
-            val nodes = root.findAccessibilityNodeInfosByText(label)
-            for (node in nodes) {
-                val clickable = findClickableAncestor(node)
-                if (clickable != null) {
-                    clickable.performAction(AccessibilityNodeInfo.ACTION_CLICK)
-                    return true
-                }
-            }
+            if (clickExactMatch(root, label)) return true
         }
         return false
     }
 
     private fun clickExactMatch(root: AccessibilityNodeInfo, label: String): Boolean {
-        val nodes = root.findAccessibilityNodeInfosByText(label)
-        for (node in nodes) {
-            val clickable = findClickableAncestor(node)
-            if (clickable != null) {
-                clickable.performAction(AccessibilityNodeInfo.ACTION_CLICK)
-                return true
+        val node = findNodeMatching(root, label) ?: return false
+        val clickable = findClickableAncestor(node) ?: return false
+        return clickable.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+    }
+
+    private fun findNodeMatching(root: AccessibilityNodeInfo, label: String): AccessibilityNodeInfo? {
+        val queue = ArrayDeque<AccessibilityNodeInfo>()
+        queue.add(root)
+        while (queue.isNotEmpty()) {
+            val node = queue.removeFirst()
+            val text = node.text?.toString()
+            val desc = node.contentDescription?.toString()
+            if (text == label || desc == label) {
+                return node
+            }
+            for (i in 0 until node.childCount) {
+                node.getChild(i)?.let { queue.add(it) }
             }
         }
-        return false
+        return null
     }
 
     private fun findClickableAncestor(node: AccessibilityNodeInfo): AccessibilityNodeInfo? {
