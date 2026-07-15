@@ -27,10 +27,10 @@ class ProxyAccessibilityService : AccessibilityService() {
         listOf("Proxy", "وكيل", "بروكسي")
     )
 
+    // هاد اللافتات كيبانو ملي الوكيل مطفي (Off) = أحمر
+    // أي حالة أخرى (متصل / جار الاتصال / غير متصل) = أخضر
     private val notConnectedLabels = listOf(
-        "غير متصل", "جارِ الاتصال", "جاري الاتصال",
-        "Not connected", "Connecting...", "Connecting",
-        "Non connecté", "Connexion en cours"
+        "Off", "متوقف", "Désactivé"
     )
 
     private val handler = Handler(Looper.getMainLooper())
