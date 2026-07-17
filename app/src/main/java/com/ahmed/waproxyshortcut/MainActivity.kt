@@ -1,163 +1,144 @@
 package com.ahmed.waproxyshortcut
 
-import android.accessibilityservice.AccessibilityService
+import android.accessibilityservice.AccessibilityServiceInfo
+import android.app.Activity
 import android.content.Intent
-import android.os.Handler
-import android.os.Looper
-import android.view.accessibility.AccessibilityEvent
-import android.view.accessibility.AccessibilityNodeInfo
+import android.os.Bundle
+import android.provider.Settings
+import android.view.View
+import android.view.accessibility.AccessibilityManager
+import android.widget.Button
+import android.widget.LinearLayout
+import android.widget.TextView
+import android.widget.Toast
 
-class ProxyAccessibilityService : AccessibilityService() {
+class MainActivity : Activity() {
 
-    companion object {
-        @Volatile
-        private var stepIndex = 0
-        @Volatile
-        private var statusChecked = false
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
 
-        fun resetState() {
-            stepIndex = 0
-            statusChecked = false
-        }
-    }
-
-    private val defaultSteps = listOf(
-        listOf("Settings", "Paramètres", "الإعدادات"),
-        listOf("Storage and data", "Stockage et données", "التخزين والبيانات"),
-        listOf("Proxy", "وكيل", "بروكسي")
-    )
-
-    // هاد اللافتات كيبانو ملي الوكيل مطفي (Off) = أحمر
-    // أي حالة أخرى (متصل / جار الاتصال / غير متصل) = أخضر
-    private val notConnectedLabels = listOf(
-        "Off", "متوقف", "Désactivé"
-    )
-
-    private val handler = Handler(Looper.getMainLooper())
-    private val statusTimeout = Runnable {
-        if (!statusChecked) {
-            statusChecked = true
-            reportStatus(connected = true)
-        }
-    }
-
-    override fun onAccessibilityEvent(event: AccessibilityEvent?) {
-        if (event == null) return
-        if (event.packageName != "com.whatsapp") return
-
-        if (PathStore.isRecording(this)) {
-            if (event.eventType == AccessibilityEvent.TYPE_VIEW_CLICKED) {
-                val text = event.text?.joinToString(" ")?.trim()
-                val label = if (!text.isNullOrEmpty()) text else event.contentDescription?.toString()?.trim()
-                if (!label.isNullOrEmpty()) {
-                    PathStore.appendTempStep(this, label)
-                }
-            }
+        val runNow = intent.getBooleanExtra("run_now", false)
+        if (runNow) {
+            runShortcutFlow()
+            finish()
             return
         }
 
-        if (statusChecked) return
+        setContentView(R.layout.activity_main)
+        refreshUi()
+    }
 
-        if (rootInActiveWindow == null && windows.isEmpty()) return
-        val customSteps = PathStore.getCustomSteps(this)
+    override fun onResume() {
+        super.onResume()
+        if (!intent.getBooleanExtra("run_now", false)) {
+            refreshUi()
+        }
+    }
 
-        if (customSteps.isNotEmpty()) {
-            if (stepIndex < customSteps.size) {
-                if (clickExactMatch(customSteps[stepIndex])) {
-                    stepIndex++
-                    if (stepIndex == customSteps.size) startStatusTimeout()
-                }
-            } else {
-                checkConnectionStatus()
-            }
+    private fun refreshUi() {
+        if (PathStore.isRecording(this)) {
+            showRecordingUi()
         } else {
-            if (stepIndex < defaultSteps.size) {
-                if (clickFirstMatch(defaultSteps[stepIndex])) {
-                    stepIndex++
-                    if (stepIndex == defaultSteps.size) startStatusTimeout()
-                }
-            } else {
-                checkConnectionStatus()
-            }
+            showMainMenuUi()
         }
     }
 
-    private fun startStatusTimeout() {
-        handler.removeCallbacks(statusTimeout)
-        handler.postDelayed(statusTimeout, 3000)
-    }
+    private fun showMainMenuUi() {
+        findViewById<LinearLayout>(R.id.layoutMainMenu).visibility = View.VISIBLE
+        findViewById<LinearLayout>(R.id.layoutRecording).visibility = View.GONE
 
-    private fun checkConnectionStatus() {
-        for (label in notConnectedLabels) {
-            if (findNodeAcrossWindows(label) != null) {
-                statusChecked = true
-                handler.removeCallbacks(statusTimeout)
-                reportStatus(connected = false)
-                return
-            }
+        findViewById<Button>(R.id.btnRun).setOnClickListener {
+            runShortcutFlow()
+            finish()
+        }
+
+        findViewById<Button>(R.id.btnRecord).setOnClickListener {
+            startRecording()
+        }
+
+        findViewById<Button>(R.id.btnClearPath).setOnClickListener {
+            PathStore.clearCustomPath(this)
+            Toast.makeText(this, "تم حذف المسار المسجل، رجعنا للمسار الافتراضي", Toast.LENGTH_LONG).show()
         }
     }
 
-    private fun reportStatus(connected: Boolean) {
-        val intent = Intent(ProxyWidgetProvider.ACTION_STATUS_UPDATE)
-        intent.setPackage(packageName)
-        intent.putExtra(ProxyWidgetProvider.EXTRA_CONNECTED, connected)
-        sendBroadcast(intent)
-    }
+    private fun showRecordingUi() {
+        findViewById<LinearLayout>(R.id.layoutMainMenu).visibility = View.GONE
+        findViewById<LinearLayout>(R.id.layoutRecording).visibility = View.VISIBLE
 
-    private fun clickFirstMatch(labels: List<String>): Boolean {
-        for (label in labels) {
-            if (clickExactMatch(label)) return true
+        val count = PathStore.getTempSteps(this).size
+        findViewById<TextView>(R.id.recordingStatusText).text =
+            "جاري التسجيل...\nعدد الخطوات المسجلة: $count\n\nمشي لواتساب ودوس بالترتيب على:\nالإعدادات ← التخزين والبيانات ← الوكيل\nمن بعد رجع هنا ودوس إيقاف وحفظ"
+
+        findViewById<Button>(R.id.btnStopSave).setOnClickListener {
+            PathStore.saveCustomPathFromTemp(this)
+            PathStore.setRecording(this, false)
+            Toast.makeText(this, "تم حفظ المسار الجديد!", Toast.LENGTH_LONG).show()
+            refreshUi()
         }
-        return false
-    }
 
-    private fun clickExactMatch(label: String): Boolean {
-        val node = findNodeAcrossWindows(label) ?: return false
-        val clickable = findClickableAncestor(node) ?: return false
-        return clickable.performAction(AccessibilityNodeInfo.ACTION_CLICK)
-    }
-
-    // كيقلب فجميع النوافذ المفتوحة (بما فيها القوائم المنبثقة كـ "3 نقط")
-    // ماشي غير فالنافذة الرئيسية
-    private fun findNodeAcrossWindows(label: String): AccessibilityNodeInfo? {
-        rootInActiveWindow?.let { active ->
-            findNodeMatching(active, label)?.let { return it }
+        findViewById<Button>(R.id.btnCancelRecording).setOnClickListener {
+            PathStore.clearTempSteps(this)
+            PathStore.setRecording(this, false)
+            refreshUi()
         }
-        for (window in windows) {
-            val root = window.root ?: continue
-            findNodeMatching(root, label)?.let { return it }
-        }
-        return null
     }
 
-    private fun findNodeMatching(root: AccessibilityNodeInfo, label: String): AccessibilityNodeInfo? {
-        val queue = ArrayDeque<AccessibilityNodeInfo>()
-        queue.add(root)
-        while (queue.isNotEmpty()) {
-            val node = queue.removeFirst()
-            val text = node.text?.toString()
-            val desc = node.contentDescription?.toString()
-            if (text == label || desc == label) {
-                return node
-            }
-            for (i in 0 until node.childCount) {
-                node.getChild(i)?.let { queue.add(it) }
-            }
+    private fun startRecording() {
+        if (!isAccessibilityServiceEnabled()) {
+            Toast.makeText(
+                this,
+                "خاصك تفعل الصلاحية ديال Accessibility مرة وحدة قبل التسجيل",
+                Toast.LENGTH_LONG
+            ).show()
+            startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+            return
         }
-        return null
+
+        PathStore.clearTempSteps(this)
+        PathStore.setRecording(this, true)
+
+        Toast.makeText(
+            this,
+            "دابا مشي لواتساب ودوس بالترتيب على: الإعدادات ← التخزين والبيانات ← الوكيل. من بعد رجع لهاد التطبيق",
+            Toast.LENGTH_LONG
+        ).show()
+
+        val whatsappIntent = packageManager.getLaunchIntentForPackage("com.whatsapp")
+        if (whatsappIntent != null) {
+            whatsappIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            startActivity(whatsappIntent)
+        } else {
+            Toast.makeText(this, "واتساب ماشي مثبت فهاد الهاتف", Toast.LENGTH_LONG).show()
+        }
     }
 
-    private fun findClickableAncestor(node: AccessibilityNodeInfo): AccessibilityNodeInfo? {
-        var current: AccessibilityNodeInfo? = node
-        var depth = 0
-        while (current != null && depth < 6) {
-            if (current.isClickable) return current
-            current = current.parent
-            depth++
+    private fun runShortcutFlow() {
+        if (!isAccessibilityServiceEnabled()) {
+            Toast.makeText(
+                this,
+                "خاصك تفعل الصلاحية ديال Accessibility مرة وحدة باش يخدم الاختصار",
+                Toast.LENGTH_LONG
+            ).show()
+            startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+            return
         }
-        return null
+
+        ProxyAccessibilityService.resetState()
+
+        val whatsappIntent = packageManager.getLaunchIntentForPackage("com.whatsapp")
+        if (whatsappIntent != null) {
+            whatsappIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            startActivity(whatsappIntent)
+        } else {
+            Toast.makeText(this, "واتساب ماشي مثبت فهاد الهاتف", Toast.LENGTH_LONG).show()
+        }
     }
 
-    override fun onInterrupt() {}
+    private fun isAccessibilityServiceEnabled(): Boolean {
+        val am = getSystemService(ACCESSIBILITY_SERVICE) as AccessibilityManager
+        val enabledServices =
+            am.getEnabledAccessibilityServiceList(AccessibilityServiceInfo.FEEDBACK_ALL_MASK)
+        return enabledServices.any { it.resolveInfo.serviceInfo.packageName == packageName }
+    }
 }
