@@ -58,26 +58,26 @@ class ProxyAccessibilityService : AccessibilityService() {
 
         if (statusChecked) return
 
-        val root = rootInActiveWindow ?: return
+        if (rootInActiveWindow == null && windows.isEmpty()) return
         val customSteps = PathStore.getCustomSteps(this)
 
         if (customSteps.isNotEmpty()) {
             if (stepIndex < customSteps.size) {
-                if (clickExactMatch(root, customSteps[stepIndex])) {
+                if (clickExactMatch(customSteps[stepIndex])) {
                     stepIndex++
                     if (stepIndex == customSteps.size) startStatusTimeout()
                 }
             } else {
-                checkConnectionStatus(root)
+                checkConnectionStatus()
             }
         } else {
             if (stepIndex < defaultSteps.size) {
-                if (clickFirstMatch(root, defaultSteps[stepIndex])) {
+                if (clickFirstMatch(defaultSteps[stepIndex])) {
                     stepIndex++
                     if (stepIndex == defaultSteps.size) startStatusTimeout()
                 }
             } else {
-                checkConnectionStatus(root)
+                checkConnectionStatus()
             }
         }
     }
@@ -87,9 +87,9 @@ class ProxyAccessibilityService : AccessibilityService() {
         handler.postDelayed(statusTimeout, 3000)
     }
 
-    private fun checkConnectionStatus(root: AccessibilityNodeInfo) {
+    private fun checkConnectionStatus() {
         for (label in notConnectedLabels) {
-            if (findNodeMatching(root, label) != null) {
+            if (findNodeAcrossWindows(label) != null) {
                 statusChecked = true
                 handler.removeCallbacks(statusTimeout)
                 reportStatus(connected = false)
@@ -105,17 +105,30 @@ class ProxyAccessibilityService : AccessibilityService() {
         sendBroadcast(intent)
     }
 
-    private fun clickFirstMatch(root: AccessibilityNodeInfo, labels: List<String>): Boolean {
+    private fun clickFirstMatch(labels: List<String>): Boolean {
         for (label in labels) {
-            if (clickExactMatch(root, label)) return true
+            if (clickExactMatch(label)) return true
         }
         return false
     }
 
-    private fun clickExactMatch(root: AccessibilityNodeInfo, label: String): Boolean {
-        val node = findNodeMatching(root, label) ?: return false
+    private fun clickExactMatch(label: String): Boolean {
+        val node = findNodeAcrossWindows(label) ?: return false
         val clickable = findClickableAncestor(node) ?: return false
         return clickable.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+    }
+
+    // كيقلب فجميع النوافذ المفتوحة (بما فيها القوائم المنبثقة كـ "3 نقط")
+    // ماشي غير فالنافذة الرئيسية
+    private fun findNodeAcrossWindows(label: String): AccessibilityNodeInfo? {
+        rootInActiveWindow?.let { active ->
+            findNodeMatching(active, label)?.let { return it }
+        }
+        for (window in windows) {
+            val root = window.root ?: continue
+            findNodeMatching(root, label)?.let { return it }
+        }
+        return null
     }
 
     private fun findNodeMatching(root: AccessibilityNodeInfo, label: String): AccessibilityNodeInfo? {
